@@ -24,15 +24,18 @@ class CartPoleModel(BaseModel):
             self.load_weights(state_dict_path)
 
     def forward(self, x):
-        x = self.fc1(x)
+        x = F.relu(self.fc1(x))
         x = self.fc2(x)
 
         return x
 
+def transform(x):
+    return np.array(x)
+
 
 def test(iterations=100):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print("Training on:  ", device)
+    print("Testing on:  ", device)
 
     reward_history = []
 
@@ -51,9 +54,9 @@ def test(iterations=100):
         while not done:
 
             # env.render()
-            # time.sleep(0.1)
+            # time.sleep(0.05)
 
-            rewards = model.predict(np.array(observation), device)
+            rewards = model.predict(transform(observation), device)
             action = argmax(rewards)
             num_actions[action] += 1
             
@@ -74,28 +77,30 @@ def test(iterations=100):
 
 
 
-def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memory_size=10, batch_size=1, mini_batch_size=32):
+def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memory_size=10, batch_size=1, mini_batch_size=32, num_episodes=1000):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Training on:  ", device)
 
     env = gym.make('CartPole-v0')
 
     model = CartPoleModel().to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum, weight_decay=0.0001)
     criterion = torch.nn.MSELoss()
 
     long_term_memory = Memory(memory_size, buckets=True)
 
     with open("./rewards_log.csv", "w") as file:
         file.write("episode,cumulative_reward\n")
+    with open("./mean_rewards.csv", "w") as file:
+        file.write("episode,mean_reward\n")
     with open("./loss_log.csv", "w") as file:
         file.write("iteration,loss\n")
 
-    def step():
+    def experience_replay():
         if len(long_term_memory) > 0:
             batches = []
             for _ in range(batch_size): # np.random.randint(1, 2)
-                sample = long_term_memory.sample(min(len(long_term_memory), mini_batch_size))
+                sample = long_term_memory.sample(mini_batch_size)
 
                 values = model.predict([s[0] for s in sample], device)
                 predictions = model.predict([s[4] for s in sample], device)
@@ -107,7 +112,7 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
                     batch_input.append(state)
 
                     label = value
-                    label[action] = reward+(discount*prediction.max() if not terminal else 0)
+                    label[action] = reward+(discount*np.amax(prediction) if not terminal else 0)
                     batch_label.append(label)
 
                 batches.append((np.array(batch_input), np.array(batch_label)))
@@ -125,15 +130,15 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
                         optimizer.step()
                         running_loss += loss.item()
 
-                        if running_loss > 1000000:
+                        if running_loss > 1000000000:
                             print(outputs.cpu().detach().numpy())
                             print([[float(x[0]), float(x[1])] for x in list(batch_label)])
                             exit(1)
 
                     return running_loss / len(batches)
         
+    cumulative_rewards = []
     iteration = 0
-    num_episodes = 2000
     for episode in range(num_episodes):
         timestep = 0
         state = env.reset()
@@ -143,8 +148,8 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
         short_term = Memory(None, buckets=True)
 
         while not done:
-            prev_state = np.array(state)
-            if np.random.rand(1) < explore_prob:
+            prev_state = transform(state)
+            if np.random.rand(1) < explore_prob*(num_episodes-episode)/num_episodes:
                 action = env.action_space.sample()
             else:
                 rewards = model.predict(prev_state, device)
@@ -157,34 +162,55 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
                 #     exit(1)
             
             state, reward, done, info = env.step(action)
+            reward = reward if not done else -reward
 
             timestep += 1
             iteration += 1
             cumulative_reward += reward
-            short_term.learn([prev_state, action, reward, done, np.array(state)])
+            short_term.remember([prev_state, action, reward, done, transform(state)])
 
-            loss = step()
+            loss = experience_replay()
 
             if done:
-                discounted_reward = 0
-                for i in range(len(short_term)-1, -1, -1):
-                    discounted_reward = discount * discounted_reward + short_term[i][2]
 
-                    short_term[i][2] = discounted_reward
+                # discounted_reward = 0
+                # for i in range(len(short_term)-1, -1, -1):
+                #     discounted_reward = discount * discounted_reward + short_term[i][2]
+
+                #     short_term[i][2] = discounted_reward
 
                 # print(np.array([short_term[i][2] for i in range(len(short_term))]))
 
-                long_term_memory.learn(short_term.memory)
-
-                print(f"\rEpisode: {episode}", end="")
-                if cumulative_reward > 195:
-                    print("     Goal Reached!".ljust(20))
+                print(f"\rEpisode: {episode}".ljust(20), end="")
+                # if cumulative_reward > 195:
+                #     print("     Goal Reached!".ljust(20))
 
                 with open("./rewards_log.csv", "a") as file:
                     file.write(f"{episode},{cumulative_reward}\n")
 
                 with open("./loss_log.csv", "a") as file:
                     file.write(f"{iteration},{loss}\n")
+
+
+
+                cumulative_rewards.append(cumulative_reward)
+                remember = True
+                if len(cumulative_rewards) >= 100:
+                    mean = np.mean(cumulative_rewards[-100:])
+                    if mean > 195:
+                        print("\nGoal Reached!\n")
+                        model.save_weights("./trained_cartpole_model")
+                        print("\r", end="")
+                        return
+                    else:
+                        print("Mean: ", mean, end="")
+                        with open("./mean_rewards.csv", "a") as file:
+                            file.write(f"{episode},{mean}\n")
+                        if cumulative_reward < (mean-np.std(cumulative_rewards[-100:])):
+                            remember = False
+
+                if remember:
+                    long_term_memory.remember(short_term.memory)
 
     
     # print(model.predict(short_term.memory[0][0], device))
@@ -194,5 +220,19 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
     print("\r", end="")
 
 if __name__ == "__main__":
-    train(learning_rate=0.001, momentum=0, explore_prob=0.1, discount=0.8, memory_size=10, batch_size=1, mini_batch_size=32)
+    # train(
+    #     learning_rate=0.001, momentum=0.9, 
+    #     explore_prob=0.25, discount=0.95, 
+    #     memory_size=150, batch_size=1, mini_batch_size=64, 
+    #     num_episodes=10000)
     test(iterations=100)
+
+    '''
+    Training on:   cpu
+    Episode: 285       Mean:  194.99
+    Goal Reached!
+
+    Training on:   cpu
+    200.0±0.0   (200.0, 200.0)
+    [10047, 9953]
+    '''

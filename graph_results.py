@@ -3,11 +3,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 df = pd.read_csv("./Cart-Pole/rewards_log.csv")
-print(df["cumulative_reward"].max())
-print(df["cumulative_reward"].idxmax())
 
-plt.plot(df["episode"], df[f"cumulative_reward"], c=f"C0")
-plt.plot(df["episode"], np.polyval(np.polyfit(df["episode"], df[f"cumulative_reward"], 1), df["episode"]), c=f"C1", label=f"cumulative_reward")
+column = "cumulative_reward"
+print(df[column].max())
+print(df[column].idxmax())
+
+plt.plot(df["episode"], df[column], c=f"C0")
+plt.plot(df["episode"], np.polyval(np.polyfit(df["episode"], df[column], 1), df["episode"]), c=f"C1", label=column)
 
 plt.show()
 

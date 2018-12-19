@@ -45,7 +45,7 @@ class Memory():
     def __len__(self):
         return len(self.memory)
 
-    def learn(self, items):
+    def remember(self, items):
         if self.buckets:
             self.memory.append(items)
         else:
