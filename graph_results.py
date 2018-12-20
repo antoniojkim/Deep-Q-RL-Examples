@@ -2,9 +2,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-df = pd.read_csv("./Cart-Pole/rewards_log.csv")
+df = pd.read_csv("./Acrobot/mean_rewards.csv")
 
-column = "cumulative_reward"
+column = "mean_reward"
 print(df[column].max())
 print(df[column].idxmax())
 

@@ -7,18 +7,19 @@ from model import *
 
 from random import shuffle
 import time
+from math import inf
 
 import numpy as np
 import gym
 
 
-class CartPoleModel(BaseModel):
+class AcrobotModel(BaseModel):
 
-    def __init__(self, state_dict_path=None, verbose=False):
-        super(CartPoleModel, self).__init__()
+    def __init__(self, state_dict_path=None, **kwargs):
+        super(AcrobotModel, self).__init__(**kwargs)
 
-        self.fc1 = torch.nn.Linear(4, 8).double()
-        self.fc2 = torch.nn.Linear(8, 2).double()
+        self.fc1 = torch.nn.Linear(6, 12).double()
+        self.fc2 = torch.nn.Linear(12, 3).double()
 
         if state_dict_path is not None:
             self.load_weights(state_dict_path)
@@ -33,17 +34,8 @@ def transform(x):
     return np.array(x)
 
 
-def test(iterations=100):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print("Testing on:  ", device)
-
-    reward_history = []
-
-    env = gym.make('CartPole-v0')
-
-    model = CartPoleModel("./trained_cartpole_model").to(device)
-
-    num_actions = [0, 0]
+def random_test(iterations=3):
+    env = gym.make('Acrobot-v1')
 
     for iteration in range(iterations):
         timestep = 0
@@ -54,7 +46,45 @@ def test(iterations=100):
         while not done:
 
             env.render()
-            time.sleep(0.05)
+            time.sleep(0.01)
+
+            action = env.action_space.sample()
+            
+            observation, reward, done, info = env.step(action)
+
+            timestep += 1
+            cumulative_reward += reward
+
+            print(f"\rTimestep:  {timestep}".ljust(20), "  Reward: ", cumulative_reward, end="")
+
+            if done:
+                # print(f"Episode finished after {timestep} timesteps.  Reward: {cumulative_reward}")
+                break
+
+
+def test(iterations=100, verbose=False, delay=0.0025):
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print("Testing on:  ", device)
+
+    reward_history = []
+
+    env = gym.make('Acrobot-v1')
+
+    model = AcrobotModel("./best_acrobot_model").to(device)
+
+    num_actions = [0, 0, 0]
+
+    for iteration in range(iterations):
+        timestep = 0
+        observation = env.reset()
+        cumulative_reward = 0
+        done = False
+
+        while not done:
+
+            if verbose:
+                env.render()
+                time.sleep(delay)
 
             rewards = model.predict(transform(observation), device)
             action = argmax(rewards)
@@ -81,13 +111,11 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Training on:  ", device)
 
-    env = gym.make('CartPole-v0')
+    env = gym.make('Acrobot-v1')
 
-    model = CartPoleModel().to(device)
+    model = AcrobotModel(max_size=memory_size, batch_size=batch_size, mini_batch_size=mini_batch_size).to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum, weight_decay=0.0001)
     criterion = torch.nn.MSELoss()
-
-    long_term_memory = Memory(memory_size, buckets=True)
 
     with open("./rewards_log.csv", "w") as file:
         file.write("episode,cumulative_reward\n")
@@ -95,49 +123,9 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
         file.write("episode,mean_reward\n")
     with open("./loss_log.csv", "w") as file:
         file.write("iteration,loss\n")
-
-    def experience_replay():
-        if len(long_term_memory) > 0:
-            batches = []
-            for _ in range(batch_size): # np.random.randint(1, 2)
-                sample = long_term_memory.sample(mini_batch_size)
-
-                values = model.predict([s[0] for s in sample], device)
-                predictions = model.predict([s[4] for s in sample], device)
-
-                batch_input = []
-                batch_label = []
-                for s, value, prediction in zip(sample, values, predictions):
-                    state, action, reward, terminal, next_state = s
-                    batch_input.append(state)
-
-                    label = value
-                    label[action] = reward+(discount*np.amax(prediction) if not terminal else 0)
-                    batch_label.append(label)
-
-                batches.append((np.array(batch_input), np.array(batch_label)))
-                
-                if len(batches) > 0:
-                    running_loss = 0
-                    for batch_input, batch_label in batches:
-                        input_tensor = torch.from_numpy(batch_input).double().to(device)
-                        label_tensor = torch.from_numpy(batch_label).double().to(device)
-                
-                        optimizer.zero_grad()
-                        outputs = model.forward(input_tensor)
-                        loss = criterion(outputs, label_tensor)
-                        loss.backward()
-                        optimizer.step()
-                        running_loss += loss.item()
-
-                        if running_loss > 1000000000:
-                            print(outputs.cpu().detach().numpy())
-                            print([[float(x[0]), float(x[1])] for x in list(batch_label)])
-                            exit(1)
-
-                    return running_loss / len(batches)
         
     cumulative_rewards = []
+    max_reward = -inf
     iteration = 0
     for episode in range(num_episodes):
         timestep = 0
@@ -162,14 +150,13 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
                 #     exit(1)
             
             state, reward, done, info = env.step(action)
-            reward = reward if not done else -reward
 
             timestep += 1
             iteration += 1
             cumulative_reward += reward
             short_term.remember([prev_state, action, reward, done, transform(state)])
 
-            loss = experience_replay()
+            loss = model.experience_replay(optimizer, criterion, device)
 
             if done:
 
@@ -191,48 +178,34 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
                 with open("./loss_log.csv", "a") as file:
                     file.write(f"{iteration},{loss}\n")
 
-
-
                 cumulative_rewards.append(cumulative_reward)
                 remember = True
                 if len(cumulative_rewards) >= 100:
                     mean = np.mean(cumulative_rewards[-100:])
-                    if mean > 195:
-                        print("\nGoal Reached!\n")
-                        model.save_weights("./trained_cartpole_model")
-                        print("\r", end="")
-                        return
-                    else:
-                        print("Mean: ", mean, end="")
-                        with open("./mean_rewards.csv", "a") as file:
-                            file.write(f"{episode},{mean}\n")
-                        if cumulative_reward < (mean-np.std(cumulative_rewards[-100:])):
-                            remember = False
+                    print("Mean: ", mean, end="")
+                    if mean > max_reward:
+                        model.save_weights("./best_acrobot_model")
+                        max_reward = mean
+                    with open("./mean_rewards.csv", "a") as file:
+                        file.write(f"{episode},{mean}\n")
+                    if cumulative_reward < (mean-np.std(cumulative_rewards[-100:])):
+                        remember = False
 
                 if remember:
-                    long_term_memory.remember(short_term.memory)
+                    model.memory.remember(short_term.memory)
 
     
     # print(model.predict(short_term.memory[0][0], device))
 
 
-    model.save_weights("./trained_cartpole_model")
+    model.save_weights("./trained_acrobot_model")
     print("\r", end="")
 
 if __name__ == "__main__":
-    # train(
-    #     learning_rate=0.001, momentum=0.9, 
-    #     explore_prob=0.25, discount=0.95, 
-    #     memory_size=150, batch_size=1, mini_batch_size=64, 
-    #     num_episodes=10000)
-    test(iterations=100)
-
-    '''
-    Training on:   cpu
-    Episode: 285       Mean:  194.99
-    Goal Reached!
-
-    Training on:   cpu
-    200.0±0.0   (200.0, 200.0)
-    [10047, 9953]
-    '''
+    train(
+        learning_rate=0.001, momentum=0.9, 
+        explore_prob=0.25, discount=0.95, 
+        memory_size=150, batch_size=1, mini_batch_size=64, 
+        num_episodes=10000)
+    # test(iterations=1, verbose=True, delay=0.0025)
+    # random_test()
