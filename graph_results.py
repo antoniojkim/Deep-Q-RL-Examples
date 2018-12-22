@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-df = pd.read_csv("./Acrobot/mean_rewards.csv")
+df = pd.read_csv("./Cart-Pole/mean_rewards.csv")
 
 column = "mean_reward"
 print(df[column].max())

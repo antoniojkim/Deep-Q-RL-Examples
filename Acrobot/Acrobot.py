@@ -70,7 +70,7 @@ def test(iterations=100, verbose=False, delay=0.0025):
 
     env = gym.make('Acrobot-v1')
 
-    model = AcrobotModel("./best_acrobot_model").to(device)
+    model = AcrobotModel().to(device) # "./best_acrobot_model"
 
     num_actions = [0, 0, 0]
 
@@ -202,10 +202,10 @@ def train(learning_rate=0.01, momentum=0, explore_prob=0.1, discount=0.99, memor
     print("\r", end="")
 
 if __name__ == "__main__":
-    train(
-        learning_rate=0.001, momentum=0.9, 
-        explore_prob=0.25, discount=0.95, 
-        memory_size=150, batch_size=1, mini_batch_size=64, 
-        num_episodes=10000)
-    # test(iterations=1, verbose=True, delay=0.0025)
+    # train(
+    #     learning_rate=0.001, momentum=0.9, 
+    #     explore_prob=0.1, discount=0.95, 
+    #     memory_size=100, batch_size=1, mini_batch_size=32, 
+    #     num_episodes=10000)
+    test(iterations=1, verbose=True, delay=0.025)
     # random_test()
